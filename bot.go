@@ -239,4 +239,3 @@ type File struct {
 	FileID   string `json:"file_id"`
 	FilePath string `json:"file_path"`
 }
-}
