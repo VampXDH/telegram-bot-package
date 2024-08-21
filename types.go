@@ -8,12 +8,12 @@ type Update struct {
 
 // Message represents a message from Telegram
 type Message struct {
-	MessageID int    `json:"message_id"`
-	From      User   `json:"from"`
-	Chat      Chat   `json:"chat"`
-	Date      int    `json:"date"`
-	Text      string `json:"text"`
-	Document  Document `json:"document"`
+	MessageID int      `json:"message_id"`
+	From      User     `json:"from"`
+	Chat      Chat     `json:"chat"`
+	Date      int      `json:"date"`
+	Text      string   `json:"text"`
+	Document  Document `json:"document"` // Field untuk dokumen yang dikirim
 }
 
 // Document represents a document sent to the bot
