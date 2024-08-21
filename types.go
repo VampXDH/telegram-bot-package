@@ -13,7 +13,7 @@ type Message struct {
 	Chat      Chat     `json:"chat"`
 	Date      int      `json:"date"`
 	Text      string   `json:"text"`
-	Document  Document `json:"document"` // Field untuk dokumen yang dikirim
+	Document  Document `json:"document"`  // Field untuk dokumen yang dikirim
 }
 
 // Document represents a document sent to the bot
