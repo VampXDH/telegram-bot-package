@@ -11,21 +11,23 @@ import (
 type Bot struct {
 	Token  string
 	BaseURL string
+	ChatID int64
 }
 
 // NewBot creates a new Telegram bot
-func NewBot(token string) *Bot {
+func NewBot(token string, chatID int64) *Bot {
 	return &Bot{
 		Token:  token,
 		BaseURL: fmt.Sprintf("https://api.telegram.org/bot%s/", token),
+		ChatID: chatID,
 	}
 }
 
 // SendMessage sends a message to a specific chat ID
-func (b *Bot) SendMessage(chatID int64, text string) error {
+func (b *Bot) SendMessage(text string) error {
 	url := b.BaseURL + "sendMessage"
 	message := map[string]interface{}{
-		"chat_id": chatID,
+		"chat_id": b.ChatID,
 		"text":    text,
 	}
 	messageJSON, err := json.Marshal(message)
