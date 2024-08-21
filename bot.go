@@ -1,13 +1,17 @@
 package telegrambot
 
 import (
+	"bytes"
 	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -94,25 +98,6 @@ func (b *Bot) GetUpdates(offset int) ([]Update, error) {
 	return response.Result, nil
 }
 
-// HandleDocument processes a document sent by the user
-func (b *Bot) HandleDocument(update Update) (int, error) {
-	if update.Message.Document.FileID == "" {
-		return 0, errors.New("no document file ID found")
-	}
-
-	fileURL, err := b.GetFileURL(update.Message.Document.FileID)
-	if err != nil {
-		return 0, err
-	}
-
-	lineCount, err := b.CountLinesInFile(fileURL)
-	if err != nil {
-		return 0, err
-	}
-
-	return lineCount, nil
-}
-
 // GetFileURL retrieves the file URL from Telegram server
 func (b *Bot) GetFileURL(fileID string) (string, error) {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getFile", b.Token)
@@ -145,34 +130,53 @@ func (b *Bot) GetFileURL(fileID string) (string, error) {
 	return fileURL, nil
 }
 
-// CountLinesInFile counts the number of lines in the file from the provided URL
-func (b *Bot) CountLinesInFile(fileURL string) (int, error) {
-	resp, err := http.Get(fileURL)
+// SendFile sends a file to a specific chat ID
+func (b *Bot) SendFile(chatID int64, filePath string, caption string) error {
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", b.Token)
+
+	file, err := os.Open(filePath)
 	if err != nil {
-		return 0, err
+		return fmt.Errorf("could not open file: %v", err)
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("document", filepath.Base(filePath))
+	if err != nil {
+		return fmt.Errorf("could not create form file: %v", err)
+	}
+
+	_, err = io.Copy(part, file)
+	if err != nil {
+		return fmt.Errorf("could not copy file content: %v", err)
+	}
+
+	writer.WriteField("chat_id", fmt.Sprintf("%d", chatID))
+	if caption != "" {
+		writer.WriteField("caption", caption)
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("could not close writer: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", apiURL, body)
+	if err != nil {
+		return fmt.Errorf("could not create request: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := b.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("could not send request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, errors.New("failed to download file")
+		return fmt.Errorf("failed to send file: %v", resp.Status)
 	}
 
-	reader := bufio.NewReader(resp.Body)
-	lineCount := 0
-
-	for {
-		_, isPrefix, err := reader.ReadLine()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return 0, err
-		}
-
-		if !isPrefix {
-			lineCount++
-		}
-	}
-
-	return lineCount, nil
+	return nil
 }
