@@ -1,104 +1,134 @@
 package telegrambot
 
 import (
-	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/http"
+	"net/url"
+	"sync"
+	"time"
 )
 
-// Bot represents the Telegram bot
+// Bot struct represents a Telegram Bot
 type Bot struct {
-	Token   string
-	BaseURL string
+	Token       string
+	Client      *http.Client
+	commands    map[string]func(chatID int64) string
+	mu          sync.Mutex
 }
 
-// NewBot creates a new Telegram bot
+// NewBot creates a new Telegram Bot instance
 func NewBot(token string) *Bot {
 	return &Bot{
-		Token:   token,
-		BaseURL: fmt.Sprintf("https://api.telegram.org/bot%s/", token),
+		Token:    token,
+		Client:   &http.Client{Timeout: 30 * time.Second},
+		commands: make(map[string]func(chatID int64) string),
 	}
+}
+
+// HandleUpdate processes incoming updates from Telegram
+func (b *Bot) HandleUpdate(update Update) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if handler, exists := b.commands[update.Message.Text]; exists {
+		response := handler(update.Message.Chat.ID)
+		b.SendMessage(update.Message.Chat.ID, response)
+	}
+
+	return nil
+}
+
+// AddCommand allows users to add custom commands and their handlers
+func (b *Bot) AddCommand(command string, handler func(chatID int64) string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.commands[command] = handler
 }
 
 // SendMessage sends a message to a specific chat ID
 func (b *Bot) SendMessage(chatID int64, text string) error {
-	url := b.BaseURL + "sendMessage"
-	message := map[string]interface{}{
-		"chat_id": chatID,
-		"text":    text,
-	}
-	messageJSON, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.Token)
+	data := url.Values{}
+	data.Set("chat_id", fmt.Sprintf("%d", chatID))
+	data.Set("text", text)
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(messageJSON))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := b.Client.PostForm(apiURL, data)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send message: %s", resp.Status)
+		return errors.New("failed to send message")
 	}
 
 	return nil
 }
 
-// GetUpdates fetches updates (new messages) from the Telegram API
+// GetUpdates retrieves updates from the bot
 func (b *Bot) GetUpdates(offset int) ([]Update, error) {
-	url := fmt.Sprintf("%sgetUpdates?offset=%d", b.BaseURL, offset)
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", b.Token)
+	data := url.Values{}
+	data.Set("offset", fmt.Sprintf("%d", offset))
 
-	resp, err := http.Get(url)
+	resp, err := b.Client.PostForm(apiURL, data)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var response struct {
-		Ok     bool     `json:"ok"`
-		Result []Update `json:"result"`
-	}
-
-	err = json.Unmarshal(body, &response)
+	var response UpdateResponse
+	err = json.NewDecoder(resp.Body).Decode(&response)
 	if err != nil {
 		return nil, err
 	}
 
 	if !response.Ok {
-		return nil, fmt.Errorf("failed to fetch updates")
+		return nil, errors.New("failed to get updates")
 	}
 
 	return response.Result, nil
 }
 
-// Update represents an incoming update from the Telegram API
+// Update represents an update from Telegram
 type Update struct {
-	UpdateID int    `json:"update_id"`
+	UpdateID int     `json:"update_id"`
 	Message  Message `json:"message"`
 }
 
-// Message represents a Telegram message
+// Message represents a message from Telegram
 type Message struct {
-	Chat Chat   `json:"chat"`
-	Text string `json:"text"`
+	MessageID int    `json:"message_id"`
+	From      User   `json:"from"`
+	Chat      Chat   `json:"chat"`
+	Date      int    `json:"date"`
+	Text      string `json:"text"`
 }
 
-// Chat represents a Telegram chat
+// User represents a user on Telegram
+type User struct {
+	ID           int    `json:"id"`
+	IsBot        bool   `json:"is_bot"`
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name"`
+	Username     string `json:"username"`
+	LanguageCode string `json:"language_code"`
+}
+
+// Chat represents a chat on Telegram
 type Chat struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Username  string `json:"username"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+// UpdateResponse represents the response from Telegram getUpdates method
+type UpdateResponse struct {
+	Ok     bool     `json:"ok"`
+	Result []Update `json:"result"`
 }
