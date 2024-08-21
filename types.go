@@ -13,6 +13,14 @@ type Message struct {
 	Chat      Chat   `json:"chat"`
 	Date      int    `json:"date"`
 	Text      string `json:"text"`
+	Document  Document `json:"document"`
+}
+
+// Document represents a document sent to the bot
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	FileSize int    `json:"file_size"`
 }
 
 // User represents a user on Telegram
@@ -39,4 +47,16 @@ type Chat struct {
 type UpdateResponse struct {
 	Ok     bool     `json:"ok"`
 	Result []Update `json:"result"`
+}
+
+// FileResponse represents the response from Telegram getFile method
+type FileResponse struct {
+	Ok     bool   `json:"ok"`
+	Result File   `json:"result"`
+}
+
+// File represents the file information from Telegram getFile response
+type File struct {
+	FileID   string `json:"file_id"`
+	FilePath string `json:"file_path"`
 }
