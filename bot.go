@@ -1,177 +1,109 @@
 package telegrambot
 
 import (
-	"bytes"
+	"encoding/json"
 	"fmt"
-	"io"
-	"mime/multipart"
+	"io/ioutil"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
+	"net/url"
+	"strconv"
 )
 
+// Bot struct untuk menyimpan token bot
 type Bot struct {
-	Token    string
-	Client   *http.Client
-	commands map[string]func(chatID int64) string
-	mu       sync.Mutex
+	Token string
 }
 
-// NewBot creates a new Telegram Bot instance
+// Update struct untuk mem-parsing pembaruan yang diterima
+type Update struct {
+	UpdateID int           `json:"update_id"`
+	Message  MessageStruct `json:"message"`
+}
+
+// MessageStruct untuk mem-parsing pesan
+type MessageStruct struct {
+	MessageID int      `json:"message_id"`
+	From      User     `json:"from"`
+	Chat      Chat     `json:"chat"`
+	Date      int      `json:"date"`
+	Text      string   `json:"text"`
+	Entities  []Entity `json:"entities"`
+}
+
+// User struct untuk mem-parsing informasi pengguna
+type User struct {
+	ID        int    `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
+}
+
+// Chat struct untuk mem-parsing informasi chat
+type Chat struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+}
+
+// Entity struct untuk mem-parsing entitas pesan
+type Entity struct {
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+	Type   string `json:"type"`
+}
+
+// NewBot membuat instance baru dari Bot
 func NewBot(token string) *Bot {
 	return &Bot{
-		Token:    token,
-		Client:   &http.Client{Timeout: 30 * time.Second},
-		commands: make(map[string]func(chatID int64) string),
+		Token: token,
 	}
 }
 
-// HandleUpdate processes incoming updates from Telegram
-func (b *Bot) HandleUpdate(update Update) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if handler, exists := b.commands[update.Message.Text]; exists {
-		response := handler(update.Message.Chat.ID)
-		b.SendMessage(update.Message.Chat.ID, response)
-	}
-
-	return nil
-}
-
-// AddCommand allows users to add custom commands and their handlers
-func (b *Bot) AddCommand(command string, handler func(chatID int64) string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.commands[command] = handler
-}
-
-// SendMessage sends a message to a specific chat ID
+// SendMessage mengirim pesan ke chat tertentu
 func (b *Bot) SendMessage(chatID int64, text string) error {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.Token)
 	data := url.Values{}
-	data.Set("chat_id", fmt.Sprintf("%d", chatID))
+	data.Set("chat_id", strconv.FormatInt(chatID, 10))
 	data.Set("text", text)
 
-	resp, err := b.Client.PostForm(apiURL, data)
+	resp, err := http.PostForm(apiURL, data)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send message")
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to send message: %s", string(bodyBytes))
 	}
 
 	return nil
 }
 
-// GetUpdates retrieves updates from the bot
+// GetUpdates mengambil pembaruan baru dari API Telegram
 func (b *Bot) GetUpdates(offset int) ([]Update, error) {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", b.Token)
 	data := url.Values{}
-	data.Set("offset", fmt.Sprintf("%d", offset))
+	data.Set("offset", strconv.Itoa(offset))
 
-	resp, err := b.Client.PostForm(apiURL, data)
+	resp, err := http.PostForm(apiURL, data)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var response UpdateResponse
-	err = json.NewDecoder(resp.Body).Decode(&response)
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get updates: %s", string(bodyBytes))
+	}
+
+	var updatesResp struct {
+		Ok     bool     `json:"ok"`
+		Result []Update `json:"result"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&updatesResp)
 	if err != nil {
 		return nil, err
 	}
 
-	if !response.Ok {
-		return nil, fmt.Errorf("failed to get updates")
-	}
-
-	return response.Result, nil
-}
-
-// GetFileURL retrieves the file URL from Telegram server
-func (b *Bot) GetFileURL(fileID string) (string, error) {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getFile", b.Token)
-	data := url.Values{}
-	data.Set("file_id", fileID)
-
-	resp, err := b.Client.PostForm(apiURL, data)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get file URL")
-	}
-
-	var fileResponse FileResponse
-	err = json.NewDecoder(resp.Body).Decode(&fileResponse)
-	if err != nil {
-		return "", err
-	}
-
-	if !fileResponse.Ok {
-		return "", fmt.Errorf("failed to get file URL")
-	}
-
-	filePath := fileResponse.Result.FilePath
-	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", b.Token, filePath)
-
-	return fileURL, nil
-}
-
-// SendFile sends a file to a specific chat ID
-func (b *Bot) SendFile(chatID int64, filePath string, caption string) error {
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", b.Token)
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("could not open file: %v", err)
-	}
-	defer file.Close()
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("document", filepath.Base(filePath))
-	if err != nil {
-		return fmt.Errorf("could not create form file: %v", err)
-	}
-
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return fmt.Errorf("could not copy file content: %v", err)
-	}
-
-	writer.WriteField("chat_id", fmt.Sprintf("%d", chatID))
-	if caption != "" {
-		writer.WriteField("caption", caption)
-	}
-
-	err = writer.Close()
-	if err != nil {
-		return fmt.Errorf("could not close writer: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", apiURL, body)
-	if err != nil {
-		return fmt.Errorf("could not create request: %v", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := b.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("could not send request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to send file: %v", resp.Status)
-	}
-
-	return nil
+	return updatesResp.Result, nil
 }
